@@ -1,0 +1,35 @@
+services:
+  html-export-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: html-export-api
+    environment:
+      UVICORN_WORKERS: "2"
+      FORWARDED_ALLOW_IPS: "*"
+    ports:
+      - "5088:5088"
+    command:
+      - uvicorn
+      - html_export_api:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5088"
+      - --workers
+      - "${UVICORN_WORKERS:-2}"
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - "${FORWARDED_ALLOW_IPS:-*}"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5088/health').read()"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    init: true
+    restart: unless-stopped
