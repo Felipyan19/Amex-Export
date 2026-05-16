@@ -21,6 +21,8 @@ FIXED_IMAGE_LAYOUT = "images"
 class ExportJsonPayload(BaseModel):
     html: str = Field(..., min_length=1)
     filename: Optional[str] = "input.html"
+    artifact_name: Optional[str] = None
+    delivery_type: Optional[str] = None
 
 
 app = FastAPI(
@@ -41,7 +43,13 @@ def _safe_html_name(name: Optional[str]) -> str:
     return base
 
 
-def _build_zip(html_bytes: bytes, filename: str) -> tuple[bytes, str]:
+def _resolve_image_layout(delivery_type: Optional[str]) -> str:
+    if delivery_type and delivery_type.strip().lower() == "centurion":
+        return "root"
+    return "images"
+
+
+def _build_zip(html_bytes: bytes, filename: str, image_layout: str = FIXED_IMAGE_LAYOUT) -> tuple[bytes, str]:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         html_path = root / filename
@@ -53,7 +61,7 @@ def _build_zip(html_bytes: bytes, filename: str) -> tuple[bytes, str]:
             out_dir=out_dir,
             mode=FIXED_MODE,
             profile=FIXED_PROFILE,
-            image_layout=FIXED_IMAGE_LAYOUT,
+            image_layout=image_layout,
             dry_run_images=False,
         )
 
@@ -72,10 +80,10 @@ def _build_zip(html_bytes: bytes, filename: str) -> tuple[bytes, str]:
             if txt_path.exists():
                 zf.write(txt_path, arcname=txt_path.name)
 
-            images_dir = out_dir / "images"
+            images_dir = out_dir if image_layout == "root" else out_dir / "images"
             if images_dir.exists():
                 for file in images_dir.rglob("*"):
-                    if file.is_file():
+                    if file.is_file() and file.suffix.lower() != ".txt":
                         rel = file.relative_to(out_dir)
                         zf.write(file, arcname=str(rel).replace("\\", "/"))
 
@@ -86,7 +94,7 @@ def _build_zip(html_bytes: bytes, filename: str) -> tuple[bytes, str]:
 def root() -> dict:
     return {
         "service": "html-export-api",
-        "endpoint": "POST /export",
+        "endpoint": "POST /export/zip",
         "accepts": ["multipart/form-data (html=@file.html)", "application/json ({\"html\":\"...\"})"],
         "returns": "application/zip (html + txt + images/)",
         "docs": "/docs",
@@ -98,7 +106,7 @@ def health() -> dict:
     return {"ok": True}
 
 
-@app.post("/export")
+@app.post("/export/zip")
 async def export_endpoint(
     request: Request,
     html_file: Optional[UploadFile] = File(None, alias="html"),
@@ -117,9 +125,11 @@ async def export_endpoint(
             except Exception as exc:
                 raise HTTPException(status_code=400, detail=f"JSON invalido: {exc}")
 
-            filename = _safe_html_name(payload.filename)
+            filename = _safe_html_name(payload.artifact_name or payload.filename)
             html_bytes = payload.html.encode("utf-8")
+            image_layout = _resolve_image_layout(payload.delivery_type)
         else:
+            image_layout = FIXED_IMAGE_LAYOUT
             filename = _safe_html_name(filename_form or getattr(html_file, "filename", None))
 
             if html_file is not None:
@@ -132,7 +142,7 @@ async def export_endpoint(
             if not html_bytes:
                 raise HTTPException(status_code=400, detail="Archivo html vacio")
 
-        zip_bytes, zip_name = _build_zip(html_bytes=html_bytes, filename=filename)
+        zip_bytes, zip_name = _build_zip(html_bytes=html_bytes, filename=filename, image_layout=image_layout)
         return Response(
             content=zip_bytes,
             media_type="application/zip",
