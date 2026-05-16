@@ -1,0 +1,36 @@
+﻿# Python caches/virtual env
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Local runtime / tooling
+.python-version
+.claude/
+
+# Tests and QA artifacts
+test_*.py
+*_test.py
+golden_regression.py
+
+# Local docs (optional, remove if you want to version docs)
+HTML_EXPORT_AUTOMATION.md
+
+# Export examples / fixtures folders
+MERCHANT-*/
+MR-*/
+PP-*/
+
+# Generated outputs
+*.txt
+*.zip
+export_log.json
+*summary*.json
+
+# Keep only service code and rules modules tracked
+!html_export_api.py
+!html_export_service.py
+!html_exporter/
+!html_exporter/*.py
