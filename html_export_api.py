@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
@@ -19,16 +19,74 @@ FIXED_IMAGE_LAYOUT = "images"
 
 
 class ExportJsonPayload(BaseModel):
-    html: str = Field(..., min_length=1)
-    filename: Optional[str] = "input.html"
-    artifact_name: Optional[str] = None
-    delivery_type: Optional[str] = None
+    """JSON payload para exportación"""
+
+    html: str = Field(
+        ...,
+        min_length=1,
+        description="Contenido HTML",
+        json_schema_extra={
+            "example": "<html><body><h1>Title</h1><p>Content</p></body></html>"
+        }
+    )
+    filename: Optional[str] = Field(
+        default="input.html",
+        description="Nombre archivo (auto agrega .html)",
+        json_schema_extra={"example": "report.html"}
+    )
+    artifact_name: Optional[str] = Field(
+        default=None,
+        description="Nombre alternativo (prioridad sobre filename)",
+        json_schema_extra={"example": "statement.html"}
+    )
+    delivery_type: Optional[str] = Field(
+        default=None,
+        description="'centurion' = images en root, otro = images en images/",
+        json_schema_extra={"example": "centurion"}
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "html": "<html><body><h1>Report</h1></body></html>",
+                    "filename": "report.html"
+                },
+                {
+                    "html": "<html><body><h1>Statement</h1><img src='data:image/png;base64,iVBORw0...' /></body></html>",
+                    "artifact_name": "amex_statement.html",
+                    "delivery_type": "centurion"
+                }
+            ]
+        }
+    }
 
 
 app = FastAPI(
     title="HTML Export API",
     version="2.0.0",
-    description="Exporta HTML a ZIP (html + txt + images). Reglas automaticas, sin parametros.",
+    description="API para exportar HTML a ZIP (html + txt + images). Acepta JSON y multipart/form-data.",
+    contact={
+        "name": "Amex Export Service",
+        "url": "http://149.130.164.187:5088",
+    },
+    license_info={
+        "name": "Internal Use",
+    },
+    openapi_tags=[
+        {
+            "name": "Export",
+            "description": "Endpoints de exportación HTML a ZIP"
+        },
+        {
+            "name": "Info",
+            "description": "Información del servicio"
+        },
+        {
+            "name": "Monitoring",
+            "description": "Health check y monitoreo"
+        }
+    ]
 )
 
 
@@ -90,28 +148,161 @@ def _build_zip(html_bytes: bytes, filename: str, image_layout: str = FIXED_IMAGE
         return zip_path.read_bytes(), zip_name
 
 
-@app.get("/")
+@app.get(
+    "/",
+    tags=["Info"],
+    summary="Service info",
+    description="Retorna info del servicio en JSON"
+)
 def root() -> dict:
     return {
         "service": "html-export-api",
-        "endpoint": "POST /export/zip",
-        "accepts": ["multipart/form-data (html=@file.html)", "application/json ({\"html\":\"...\"})"],
+        "version": "2.0.0",
+        "endpoints": {
+            "json": "POST /export/json (application/json)",
+            "multipart": "POST /export/zip (multipart/form-data)"
+        },
         "returns": "application/zip (html + txt + images/)",
         "docs": "/docs",
+        "health": "/health",
     }
 
 
-@app.get("/health")
+@app.get(
+    "/health",
+    tags=["Monitoring"],
+    summary="Health check",
+    description="Retorna {\"ok\": true} si el servicio está operativo"
+)
 def health() -> dict:
     return {"ok": True}
 
 
-@app.post("/export/zip")
+@app.post(
+    "/export/json",
+    tags=["Export"],
+    summary="Exportar HTML a ZIP (JSON)",
+    description="Endpoint JSON para exportar HTML a ZIP. Acepta payload JSON con html, filename, artifact_name y delivery_type",
+    response_description="ZIP file",
+    responses={
+        200: {
+            "description": "ZIP generado exitosamente",
+            "content": {"application/zip": {}},
+            "headers": {
+                "Content-Disposition": {
+                    "description": "attachment; filename=\"{name}_export.zip\"",
+                    "schema": {"type": "string"}
+                }
+            }
+        },
+        400: {
+            "description": "Error en request",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "empty_html": {"value": {"error": "HTML vacio"}},
+                        "invalid_data": {"value": {"error": "Datos invalidos"}}
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "Error interno",
+            "content": {
+                "application/json": {
+                    "example": {"error": "Error interno: ..."}
+                }
+            }
+        }
+    }
+)
+async def export_json_endpoint(
+    payload: ExportJsonPayload = Body(
+        ...,
+        examples=[
+            {
+                "html": "<html><body><h1>Report</h1></body></html>",
+                "filename": "report.html"
+            },
+            {
+                "html": "<html><body><h1>Statement</h1><img src='data:image/png;base64,iVBORw0...' /></body></html>",
+                "artifact_name": "amex_statement.html",
+                "delivery_type": "centurion"
+            }
+        ]
+    )
+) -> Response:
+    """Endpoint específico para JSON payload"""
+    try:
+        filename = _safe_html_name(payload.artifact_name or payload.filename)
+        html_bytes = payload.html.encode("utf-8")
+        image_layout = _resolve_image_layout(payload.delivery_type)
+
+        zip_bytes, zip_name = _build_zip(html_bytes=html_bytes, filename=filename, image_layout=image_layout)
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{zip_name}"'},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error interno: {exc}")
+
+
+@app.post(
+    "/export/zip",
+    tags=["Export"],
+    summary="Exportar HTML a ZIP (multipart)",
+    description="Endpoint multipart/form-data para exportar HTML a ZIP. Acepta archivos HTML o texto",
+    response_description="ZIP file",
+    responses={
+        200: {
+            "description": "ZIP generado exitosamente",
+            "content": {"application/zip": {}},
+            "headers": {
+                "Content-Disposition": {
+                    "description": "attachment; filename=\"{name}_export.zip\"",
+                    "schema": {"type": "string"}
+                }
+            }
+        },
+        400: {
+            "description": "Error en request",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "empty_body": {"value": {"error": "Body vacio"}},
+                        "invalid_json": {"value": {"error": "JSON invalido: ..."}},
+                        "empty_html": {"value": {"error": "Archivo html vacio"}}
+                    }
+                }
+            }
+        },
+        500: {
+            "description": "Error interno",
+            "content": {
+                "application/json": {
+                    "example": {"error": "Error interno: ..."}
+                }
+            }
+        }
+    }
+)
 async def export_endpoint(
     request: Request,
-    html_file: Optional[UploadFile] = File(None, alias="html"),
-    html_text: Optional[str] = Form(None),
-    filename_form: Optional[str] = Form(None, alias="filename"),
+    html_file: Optional[UploadFile] = File(
+        None,
+        alias="html",
+        description="Archivo HTML a exportar (multipart/form-data)"
+    ),
+    html_text: Optional[str] = Form(
+        None,
+        description="Contenido HTML como texto (multipart/form-data)"
+    ),
+    filename_form: Optional[str] = Form(
+        None,
+        alias="filename",
+        description="Nombre del archivo de salida (multipart/form-data)"
+    ),
 ) -> Response:
     content_type = request.headers.get("content-type", "")
 
