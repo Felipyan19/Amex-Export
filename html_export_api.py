@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import tempfile
@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile  # noqa: F401
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
@@ -19,45 +19,27 @@ FIXED_IMAGE_LAYOUT = "images"
 
 
 class ExportJsonPayload(BaseModel):
-    """JSON payload para exportación"""
-
     html: str = Field(
         ...,
         min_length=1,
         description="Contenido HTML",
-        json_schema_extra={
-            "example": "<html><body><h1>Title</h1><p>Content</p></body></html>"
-        }
     )
-    filename: Optional[str] = Field(
-        default="input.html",
-        description="Nombre archivo (auto agrega .html)",
-        json_schema_extra={"example": "report.html"}
+    artifact_name: str = Field(
+        ...,
+        description="Nombre del archivo de salida (auto agrega .html si no lo tiene)",
     )
-    artifact_name: Optional[str] = Field(
-        default=None,
-        description="Nombre alternativo (prioridad sobre filename)",
-        json_schema_extra={"example": "statement.html"}
-    )
-    delivery_type: Optional[str] = Field(
-        default=None,
-        description="'centurion' = images en root, otro = images en images/",
-        json_schema_extra={"example": "centurion"}
+    delivery_type: str = Field(
+        ...,
+        description="'centurion' = images en root del ZIP, otro valor = images en images/",
     )
 
     model_config = {
         "json_schema_extra": {
-            "examples": [
-                {
-                    "html": "<html><body><h1>Report</h1></body></html>",
-                    "filename": "report.html"
-                },
-                {
-                    "html": "<html><body><h1>Statement</h1><img src='data:image/png;base64,iVBORw0...' /></body></html>",
-                    "artifact_name": "amex_statement.html",
-                    "delivery_type": "centurion"
-                }
-            ]
+            "example": {
+                "html": "<html><body><h1>Statement</h1></body></html>",
+                "artifact_name": "amex_statement.html",
+                "delivery_type": "centurion",
+            }
         }
     }
 
@@ -65,28 +47,22 @@ class ExportJsonPayload(BaseModel):
 app = FastAPI(
     title="HTML Export API",
     version="2.0.0",
-    description="API para exportar HTML a ZIP (html + txt + images). Acepta JSON y multipart/form-data.",
+    description=(
+        "API para exportar HTML a ZIP (html + txt + images).\n\n"
+        "El endpoint `/export/zip` acepta **dos formatos**:\n"
+        "- `application/json` — campos: `html`, `artifact_name`, `delivery_type`\n"
+        "- `multipart/form-data` — campos: `html` (archivo .html), `artifact_name`, `delivery_type`"
+    ),
     contact={
         "name": "Amex Export Service",
         "url": "http://149.130.164.187:5088",
     },
-    license_info={
-        "name": "Internal Use",
-    },
+    license_info={"name": "Internal Use"},
     openapi_tags=[
-        {
-            "name": "Export",
-            "description": "Endpoints de exportación HTML a ZIP"
-        },
-        {
-            "name": "Info",
-            "description": "Información del servicio"
-        },
-        {
-            "name": "Monitoring",
-            "description": "Health check y monitoreo"
-        }
-    ]
+        {"name": "Export", "description": "Exportación HTML a ZIP"},
+        {"name": "Info", "description": "Información del servicio"},
+        {"name": "Monitoring", "description": "Health check y monitoreo"},
+    ],
 )
 
 
@@ -148,191 +124,156 @@ def _build_zip(html_bytes: bytes, filename: str, image_layout: str = FIXED_IMAGE
         return zip_path.read_bytes(), zip_name
 
 
-@app.get(
-    "/",
-    tags=["Info"],
-    summary="Service info",
-    description="Retorna info del servicio en JSON"
-)
+_ZIP_RESPONSES = {
+    200: {
+        "description": "ZIP generado exitosamente",
+        "content": {"application/zip": {}},
+        "headers": {
+            "Content-Disposition": {
+                "description": 'attachment; filename="{name}_export.zip"',
+                "schema": {"type": "string"},
+            }
+        },
+    },
+    400: {
+        "description": "Error en request",
+        "content": {
+            "application/json": {
+                "examples": {
+                    "empty_html": {"value": {"error": "HTML vacio"}},
+                    "invalid_data": {"value": {"error": "Datos invalidos"}},
+                }
+            }
+        },
+    },
+    500: {
+        "description": "Error interno",
+        "content": {"application/json": {"example": {"error": "Error interno: ..."}}},
+    },
+}
+
+
+@app.get("/", tags=["Info"], summary="Service info")
 def root() -> dict:
     return {
         "service": "html-export-api",
         "version": "2.0.0",
-        "endpoints": {
-            "json": "POST /export/json (application/json)",
-            "multipart": "POST /export/zip (multipart/form-data)"
-        },
+        "endpoints": {"export": "POST /export/zip (application/json o multipart/form-data)"},
         "returns": "application/zip (html + txt + images/)",
         "docs": "/docs",
         "health": "/health",
     }
 
 
-@app.get(
-    "/health",
-    tags=["Monitoring"],
-    summary="Health check",
-    description="Retorna {\"ok\": true} si el servicio está operativo"
-)
+@app.get("/health", tags=["Monitoring"], summary="Health check")
 def health() -> dict:
     return {"ok": True}
 
 
 @app.post(
-    "/export/json",
-    tags=["Export"],
-    summary="Exportar HTML a ZIP (JSON)",
-    description="Endpoint JSON para exportar HTML a ZIP. Acepta payload JSON con html, filename, artifact_name y delivery_type",
-    response_description="ZIP file",
-    responses={
-        200: {
-            "description": "ZIP generado exitosamente",
-            "content": {"application/zip": {}},
-            "headers": {
-                "Content-Disposition": {
-                    "description": "attachment; filename=\"{name}_export.zip\"",
-                    "schema": {"type": "string"}
-                }
-            }
-        },
-        400: {
-            "description": "Error en request",
-            "content": {
-                "application/json": {
-                    "examples": {
-                        "empty_html": {"value": {"error": "HTML vacio"}},
-                        "invalid_data": {"value": {"error": "Datos invalidos"}}
-                    }
-                }
-            }
-        },
-        500: {
-            "description": "Error interno",
-            "content": {
-                "application/json": {
-                    "example": {"error": "Error interno: ..."}
-                }
-            }
-        }
-    }
-)
-async def export_json_endpoint(
-    payload: ExportJsonPayload = Body(
-        ...,
-        examples=[
-            {
-                "html": "<html><body><h1>Report</h1></body></html>",
-                "filename": "report.html"
-            },
-            {
-                "html": "<html><body><h1>Statement</h1><img src='data:image/png;base64,iVBORw0...' /></body></html>",
-                "artifact_name": "amex_statement.html",
-                "delivery_type": "centurion"
-            }
-        ]
-    )
-) -> Response:
-    """Endpoint específico para JSON payload"""
-    try:
-        filename = _safe_html_name(payload.artifact_name or payload.filename)
-        html_bytes = payload.html.encode("utf-8")
-        image_layout = _resolve_image_layout(payload.delivery_type)
-
-        zip_bytes, zip_name = _build_zip(html_bytes=html_bytes, filename=filename, image_layout=image_layout)
-        return Response(
-            content=zip_bytes,
-            media_type="application/zip",
-            headers={"Content-Disposition": f'attachment; filename="{zip_name}"'},
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Error interno: {exc}")
-
-
-@app.post(
     "/export/zip",
     tags=["Export"],
-    summary="Exportar HTML a ZIP (multipart)",
-    description="Endpoint multipart/form-data para exportar HTML a ZIP. Acepta archivos HTML o texto",
+    summary="Exportar HTML a ZIP",
+    description=(
+        "Exporta HTML a ZIP. Acepta dos formatos según el `Content-Type`:\n\n"
+        "- **application/json** — campos: `html` (string), `artifact_name`, `delivery_type`\n"
+        "- **multipart/form-data** — campos: `html` (archivo .html), `artifact_name`, `delivery_type`"
+    ),
     response_description="ZIP file",
-    responses={
-        200: {
-            "description": "ZIP generado exitosamente",
-            "content": {"application/zip": {}},
-            "headers": {
-                "Content-Disposition": {
-                    "description": "attachment; filename=\"{name}_export.zip\"",
-                    "schema": {"type": "string"}
-                }
-            }
-        },
-        400: {
-            "description": "Error en request",
+    responses=_ZIP_RESPONSES,
+    openapi_extra={
+        "requestBody": {
+            "required": True,
             "content": {
                 "application/json": {
-                    "examples": {
-                        "empty_body": {"value": {"error": "Body vacio"}},
-                        "invalid_json": {"value": {"error": "JSON invalido: ..."}},
-                        "empty_html": {"value": {"error": "Archivo html vacio"}}
+                    "schema": {
+                        "type": "object",
+                        "required": ["html", "artifact_name", "delivery_type"],
+                        "properties": {
+                            "html": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Contenido HTML",
+                                "example": "<html><body><h1>Statement</h1></body></html>",
+                            },
+                            "artifact_name": {
+                                "type": "string",
+                                "description": "Nombre del archivo de salida (auto agrega .html si no lo tiene)",
+                                "example": "amex_statement.html",
+                            },
+                            "delivery_type": {
+                                "type": "string",
+                                "description": "'centurion' = images en root del ZIP, otro valor = images en images/",
+                                "example": "centurion",
+                            },
+                        },
+                    },
+                    "example": {
+                        "html": "<html><body><h1>Statement</h1></body></html>",
+                        "artifact_name": "amex_statement.html",
+                        "delivery_type": "centurion",
+                    },
+                },
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["html", "artifact_name", "delivery_type"],
+                        "properties": {
+                            "html": {
+                                "type": "string",
+                                "format": "binary",
+                                "description": "Archivo HTML a exportar",
+                            },
+                            "artifact_name": {
+                                "type": "string",
+                                "description": "Nombre del archivo de salida",
+                                "example": "amex_statement.html",
+                            },
+                            "delivery_type": {
+                                "type": "string",
+                                "description": "'centurion' = images en root, otro = images en images/",
+                                "example": "centurion",
+                            },
+                        },
                     }
-                }
-            }
-        },
-        500: {
-            "description": "Error interno",
-            "content": {
-                "application/json": {
-                    "example": {"error": "Error interno: ..."}
-                }
-            }
+                },
+            },
         }
-    }
+    },
 )
 async def export_endpoint(
     request: Request,
-    html_file: Optional[UploadFile] = File(
-        None,
-        alias="html",
-        description="Archivo HTML a exportar (multipart/form-data)"
-    ),
-    html_text: Optional[str] = Form(
-        None,
-        description="Contenido HTML como texto (multipart/form-data)"
-    ),
-    filename_form: Optional[str] = Form(
-        None,
-        alias="filename",
-        description="Nombre del archivo de salida (multipart/form-data)"
-    ),
+    html: Optional[UploadFile] = File(None),
+    artifact_name: Optional[str] = Form(None),
+    delivery_type: Optional[str] = Form(None),
 ) -> Response:
     content_type = request.headers.get("content-type", "")
 
+    if content_type.startswith("application/json"):
+        raw = await request.body()
+        if not raw:
+            raise HTTPException(status_code=400, detail="Body vacio")
+        try:
+            payload = ExportJsonPayload.model_validate_json(raw)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"JSON invalido: {exc}")
+        filename = _safe_html_name(payload.artifact_name)
+        html_bytes = payload.html.encode("utf-8")
+        image_layout = _resolve_image_layout(payload.delivery_type)
+    else:
+        if html is None:
+            raise HTTPException(status_code=400, detail="Falta campo html (archivo)")
+        if not artifact_name:
+            raise HTTPException(status_code=400, detail="Falta campo artifact_name")
+        if not delivery_type:
+            raise HTTPException(status_code=400, detail="Falta campo delivery_type")
+        html_bytes = await html.read()
+        if not html_bytes:
+            raise HTTPException(status_code=400, detail="Archivo html vacio")
+        filename = _safe_html_name(artifact_name)
+        image_layout = _resolve_image_layout(delivery_type)
+
     try:
-        if content_type.startswith("application/json"):
-            raw = await request.body()
-            if not raw:
-                raise HTTPException(status_code=400, detail="Body vacio")
-            try:
-                payload = ExportJsonPayload.model_validate_json(raw)
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=f"JSON invalido: {exc}")
-
-            filename = _safe_html_name(payload.artifact_name or payload.filename)
-            html_bytes = payload.html.encode("utf-8")
-            image_layout = _resolve_image_layout(payload.delivery_type)
-        else:
-            image_layout = FIXED_IMAGE_LAYOUT
-            filename = _safe_html_name(filename_form or getattr(html_file, "filename", None))
-
-            if html_file is not None:
-                html_bytes = await html_file.read()
-            elif html_text:
-                html_bytes = html_text.encode("utf-8")
-            else:
-                raise HTTPException(status_code=400, detail="Falta campo html (file) o html_text en multipart/form-data")
-
-            if not html_bytes:
-                raise HTTPException(status_code=400, detail="Archivo html vacio")
-
         zip_bytes, zip_name = _build_zip(html_bytes=html_bytes, filename=filename, image_layout=image_layout)
         return Response(
             content=zip_bytes,
