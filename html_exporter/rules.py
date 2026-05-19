@@ -73,7 +73,7 @@ def normalize_spaces(value: str) -> str:
 
 def detect_profile(html_text: str) -> str:
     t = html_text.lower()
-    if "centurion" in t and "smiles" in t:
+    if "centurion" in t:
         return "mr_cent"
     if "membership rewards" in t and "smiles" in t:
         return "mr_plat"

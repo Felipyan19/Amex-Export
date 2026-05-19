@@ -95,6 +95,34 @@ def reduce_repeated_lines(lines: List[str], rules: ExportRules) -> List[str]:
     return out
 
 
+# Mapping bidireccional de placeholders entre sistemas ESP
+# Centurion usa @/var/@  —  No-Centurion usa {(VAR)}
+_TO_CENTURION: dict = {
+    "{(FULLNAME)}": "@/nombre/@",
+    "{(EMAIL)}": "@/mailtarget/@",
+    "{(LAST_5)}": "@/last5/@",
+    "{(MEMBER_SINCE)}": "@/membersince/@",
+    "{(URLSignature1)}": "@/viewonline_link/@",
+}
+_TO_NON_CENTURION: dict = {v: k for k, v in _TO_CENTURION.items()}
+# variante mayúscula que aparece en algunas campañas CENT
+_TO_NON_CENTURION["@/MAILTARGET/@"] = "{(EMAIL)}"
+
+
+def normalize_placeholders(lines: List[str], profile: str) -> List[str]:
+    if profile == "mr_cent":
+        mapping = _TO_CENTURION
+    else:
+        mapping = _TO_NON_CENTURION
+    out = []
+    for line in lines:
+        value = line
+        for src, dst in mapping.items():
+            value = value.replace(src, dst)
+        out.append(value)
+    return out
+
+
 ENTITY_FIXES = {
     "Â®": "(R)",
     "Ã‚Â®": "(R)",
@@ -126,6 +154,7 @@ def postprocess_lines(lines: List[str], rules: ExportRules, mode: str) -> List[s
 
     out = reduce_repeated_lines(out, rules)
     out = apply_generic_normalizations(out)
+    out = normalize_placeholders(out, rules.profile)
 
     if mode == "clean":
         out = [normalize_line_clean(x) if x else x for x in out]

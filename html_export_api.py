@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import re
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
+from urllib.parse import urlparse
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile  # noqa: F401
@@ -12,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from html_export_service import export_html
 from html_exporter.html_encode import encode_html_special_chars
+from html_exporter.postprocess import _TO_CENTURION, _TO_NON_CENTURION
 
 FIXED_MODE = "clean"
 FIXED_PROFILE = "auto"
@@ -83,18 +86,54 @@ def _resolve_image_layout(delivery_type: Optional[str]) -> str:
     return "images"
 
 
-def _build_zip(html_bytes: bytes, filename: str, image_layout: str = FIXED_IMAGE_LAYOUT) -> tuple[bytes, str]:
+def _is_centurion(delivery_type: Optional[str]) -> bool:
+    return bool(delivery_type and delivery_type.strip().lower() == "centurion")
+
+
+def _validate_img_srcs(html_text: str, is_centurion: bool = False) -> None:
+    """Exige que todas las imágenes tengan URL pública (https://) para poder descargarlas.
+    Aplica tanto a Centurion como a no-Centurion."""
+    all_srcs = re.findall(r'src="([^"]+)"', html_text, flags=re.IGNORECASE)
+    local_srcs = [s for s in all_srcs if not s.startswith("https://") and not s.startswith("http://") and not s.startswith("data:")]
+    if local_srcs:
+        examples = ", ".join(local_srcs[:3])
+        raise HTTPException(
+            status_code=400,
+            detail=f"El HTML contiene imagenes con rutas locales o relativas (se requieren URLs publicas https://): {examples}",
+        )
+
+
+def _rewrite_placeholders_in_html(html_text: str, is_centurion: bool) -> str:
+    mapping = _TO_CENTURION if is_centurion else _TO_NON_CENTURION
+    for src, dst in mapping.items():
+        html_text = html_text.replace(src, dst)
+    return html_text
+
+
+def _rewrite_img_srcs_to_relative(html_text: str) -> str:
+    def replace_src(m: re.Match) -> str:
+        url = m.group(1)
+        filename = PurePosixPath(urlparse(url).path).name
+        if filename:
+            return f'src="{filename}"'
+        return m.group(0)
+
+    return re.sub(r'src="(https?://[^"]+)"', replace_src, html_text, flags=re.IGNORECASE)
+
+
+def _build_zip(html_bytes: bytes, filename: str, image_layout: str = FIXED_IMAGE_LAYOUT, is_centurion: bool = False) -> tuple[bytes, str]:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         html_path = root / filename
         html_path.write_bytes(html_bytes)
 
         out_dir = root / "out"
+        profile = "mr_cent" if is_centurion else FIXED_PROFILE
         result = export_html(
             html_file=html_path,
             out_dir=out_dir,
             mode=FIXED_MODE,
-            profile=FIXED_PROFILE,
+            profile=profile,
             image_layout=image_layout,
             dry_run_images=False,
         )
@@ -107,6 +146,10 @@ def _build_zip(html_bytes: bytes, filename: str, image_layout: str = FIXED_IMAGE
         except UnicodeDecodeError:
             raw_html_text = html_bytes.decode("utf-8", errors="replace")
         encoded_html_text = encode_html_special_chars(raw_html_text)
+        encoded_html_text = _rewrite_placeholders_in_html(encoded_html_text, is_centurion)
+
+        if is_centurion:
+            encoded_html_text = _rewrite_img_srcs_to_relative(encoded_html_text)
 
         with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as zf:
             zf.writestr(html_path.name, encoded_html_text.encode("utf-8"))
@@ -260,6 +303,7 @@ async def export_endpoint(
         filename = _safe_html_name(payload.artifact_name)
         html_bytes = payload.html.encode("utf-8")
         image_layout = _resolve_image_layout(payload.delivery_type)
+        centurion = _is_centurion(payload.delivery_type)
     else:
         if html is None:
             raise HTTPException(status_code=400, detail="Falta campo html (archivo)")
@@ -272,9 +316,13 @@ async def export_endpoint(
             raise HTTPException(status_code=400, detail="Archivo html vacio")
         filename = _safe_html_name(artifact_name)
         image_layout = _resolve_image_layout(delivery_type)
+        centurion = _is_centurion(delivery_type)
+
+    html_text_for_validation = html_bytes.decode("utf-8", errors="replace")
+    _validate_img_srcs(html_text_for_validation, is_centurion=centurion)
 
     try:
-        zip_bytes, zip_name = _build_zip(html_bytes=html_bytes, filename=filename, image_layout=image_layout)
+        zip_bytes, zip_name = _build_zip(html_bytes=html_bytes, filename=filename, image_layout=image_layout, is_centurion=centurion)
         return Response(
             content=zip_bytes,
             media_type="application/zip",
