@@ -37,7 +37,7 @@ def export_html(
     txt_filename = txt_name or f"{html_file.stem}.txt"
     txt_path = out_dir / txt_filename
 
-    with txt_path.open("w", encoding="utf-8-sig", newline="\r\n") as file:
+    with txt_path.open("w", encoding="utf-8-sig", newline="") as file:
         file.write("\r\n".join(lines) + "\r\n")
 
     image_dir = out_dir if image_layout == "root" else out_dir / "images"

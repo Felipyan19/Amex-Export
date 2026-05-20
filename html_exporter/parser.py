@@ -118,7 +118,7 @@ class EmailHTMLToTextParser(HTMLParser):
             return
 
         if self.rules.link_style == "inline":
-            self.emit_line(f"{label}({url})" if label else url)
+            self.emit_line(f"{label} ({url})" if label else url)
             return
 
         if label:
@@ -200,7 +200,8 @@ class EmailHTMLToTextParser(HTMLParser):
             self.anchor_href = None
             self.anchor_text_parts = []
             self.anchor_img_alt_parts = []
-            self.emit_blank()
+            if self.rules.link_style == "inline":
+                self.emit_blank()
             return
 
         if lower_tag in BLOCK_TAGS:

@@ -124,12 +124,28 @@ def normalize_placeholders(lines: List[str], profile: str) -> List[str]:
 
 
 ENTITY_FIXES = {
+    # Mojibake variants
     "Â®": "(R)",
     "Ã‚Â®": "(R)",
     "â„¢": "(TM)",
     "Ã¢â€žÂ¢": "(TM)",
     "Â©": "(C)",
     "Ã‚Â©": "(C)",
+    # Unicode reales
+    "®": "(R)",   # ®
+    "™": "(TM)",  # ™
+    "©": "(C)",   # ©
+    # Superíndices numéricos (legales)
+    "¹": "(1)",   # ¹
+    "²": "(2)",   # ²
+    "³": "(3)",   # ³
+    "⁰": "(0)",   # ⁰
+    "⁴": "(4)",   # ⁴
+    "⁵": "(5)",   # ⁵
+    "⁶": "(6)",   # ⁶
+    "⁷": "(7)",   # ⁷
+    "⁸": "(8)",   # ⁸
+    "⁹": "(9)",   # ⁹
 }
 
 
