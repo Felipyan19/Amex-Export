@@ -29,7 +29,7 @@ Texto plano, listo para correo o copy-paste manual.
 | Acentos | **nativos** (`María`, `¿`, `®`) — NO entidades HTML |
 | Entidades HTML del input | decodificadas (`&aacute;` → `á`, `&iquest;` → `¿`) |
 | Mojibake típico | normalizado: `Â®` → `(R)`, `â„¢` → `(TM)`, `Â©` → `(C)` |
-| Líneas en blanco consecutivas | colapsadas a máximo **1** |
+| Líneas en blanco | **eliminadas** (máximo **0**) — la separación entre módulos la da la línea de asteriscos, no los blancos |
 | Espacios antes de `.` o `,` | eliminados |
 
 ### 2.1 Separadores de sección
@@ -132,6 +132,17 @@ Implementación: [html_exporter/html_encode.py](../html_exporter/html_encode.py)
 | Filename extraído | parte final del path (sin query string ni fragment) |
 | URLs absolutas | descargadas vía HTTP |
 | Paths relativos | copiados desde el directorio del HTML de input |
+
+### 4.1 Reescritura del `src` en el HTML del ZIP
+
+El `src` de cada `<img>` en el HTML entregado se reescribe según `delivery_type`:
+
+| `delivery_type` | Reescritura del `src` | Implementación |
+|---|---|---|
+| `centurion` | ruta **relativa** (solo el filename) — las imágenes van en root del ZIP | `_rewrite_img_srcs_to_relative` |
+| otro (**marigold**) | base pública `https://i.email.americanexpress.com/wpm/1288/Images/<filename>` | `_rewrite_img_srcs_to_marigold` |
+
+En ambos casos el filename es la parte final del path original (sin query ni fragment). Los `data:` URIs no se tocan. Implementación: [html_export_api.py](../html_export_api.py).
 
 ---
 

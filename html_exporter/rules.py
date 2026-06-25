@@ -50,7 +50,7 @@ class ExportRules:
     separator_char: str = "*"
     separator_length: int = 124
     link_style: str = "stacked"
-    max_blank_lines: int = 1
+    max_blank_lines: int = 0
     include_separator_on_hr: bool = True
     emit_alt_as_content: bool = True
     dedupe_consecutive_lines: bool = True

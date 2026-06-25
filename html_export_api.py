@@ -20,6 +20,10 @@ FIXED_MODE = "clean"
 FIXED_PROFILE = "auto"
 FIXED_IMAGE_LAYOUT = "images"
 
+# Base pública de imágenes para entregas marigold (no-Centurion).
+# El src de cada <img> se reescribe a esta base + el filename correspondiente.
+MARIGOLD_IMAGE_BASE = "https://i.email.americanexpress.com/wpm/1288/Images/"
+
 
 class ExportJsonPayload(BaseModel):
     html: str = Field(
@@ -121,6 +125,20 @@ def _rewrite_img_srcs_to_relative(html_text: str) -> str:
     return re.sub(r'src="(https?://[^"]+)"', replace_src, html_text, flags=re.IGNORECASE)
 
 
+def _rewrite_img_srcs_to_marigold(html_text: str) -> str:
+    """Reescribe el src de cada <img> a la base marigold + filename.
+    https://...algo/foo.png  ->  https://i.email.americanexpress.com/wpm/1288/Images/foo.png"""
+
+    def replace_src(m: re.Match) -> str:
+        url = m.group(1)
+        filename = PurePosixPath(urlparse(url).path).name
+        if filename:
+            return f'src="{MARIGOLD_IMAGE_BASE}{filename}"'
+        return m.group(0)
+
+    return re.sub(r'src="(https?://[^"]+)"', replace_src, html_text, flags=re.IGNORECASE)
+
+
 def _build_zip(html_bytes: bytes, filename: str, image_layout: str = FIXED_IMAGE_LAYOUT, is_centurion: bool = False) -> tuple[bytes, str]:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
@@ -150,6 +168,8 @@ def _build_zip(html_bytes: bytes, filename: str, image_layout: str = FIXED_IMAGE
 
         if is_centurion:
             encoded_html_text = _rewrite_img_srcs_to_relative(encoded_html_text)
+        else:
+            encoded_html_text = _rewrite_img_srcs_to_marigold(encoded_html_text)
 
         with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as zf:
             zf.writestr(html_path.name, encoded_html_text.encode("utf-8"))
